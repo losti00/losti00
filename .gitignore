@@ -1,0 +1,7 @@
+config.toml
+buffer/
+clips/
+work/
+__pycache__/
+*.pyc
+.venv/
