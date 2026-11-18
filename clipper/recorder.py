@@ -172,6 +172,34 @@ def cut_clip(seg_dir, segment_seconds, t_start, t_end, out_path, wait=0):
     return True
 
 
+def download_vod_range(video_id, start, length, out_path, quality):
+    """Laedt nur [start, start+length] Sekunden einer Twitch-Aufzeichnung (kein kompletter Download)."""
+    out_path = Path(out_path)
+    t = f"{int(start) // 3600}h{int(start) % 3600 // 60}m{int(start) % 60}s"
+    errlog = out_path.with_suffix(".log")
+    with open(errlog, "w") as err:
+        sl = subprocess.Popen(["streamlink", "--stdout", f"https://www.twitch.tv/videos/{video_id}?t={t}", quality],
+                              stdout=subprocess.PIPE, stderr=err)
+        try:
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", "pipe:0", "-t", f"{length:.0f}",
+                            "-c", "copy", "-movflags", "+faststart", str(out_path)],
+                           stdin=sl.stdout, stderr=err, timeout=900)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            sl.stdout.close()
+            if sl.poll() is None:
+                sl.kill()
+    ok = out_path.exists() and out_path.stat().st_size > 100_000
+    if ok:
+        errlog.unlink(missing_ok=True)
+    else:
+        tail = [l for l in errlog.read_text(errors="replace").splitlines() if l.strip()][-1:]
+        log.warning("VOD-Download fehlgeschlagen: %s", tail[0][-200:] if tail else "keine Daten")
+        out_path.unlink(missing_ok=True)
+    return ok
+
+
 def check_tools():
     missing = [t for t in ("ffmpeg", "streamlink") if not shutil.which(t)]
     if missing:

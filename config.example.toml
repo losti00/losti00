@@ -40,6 +40,15 @@ refresh_minutes = 30    # neue Top-Streamer werden laufend dazugenommen
 client_id = ""          # oder Umgebungsvariable TWITCH_CLIENT_ID
 client_secret = ""      # oder TWITCH_CLIENT_SECRET
 
+# Clips aus bereits gelaufenen Streams:  python -m clipper vod
+# Nimmt die meistgesehenen Zuschauer-Clips (Spiele aus [auto] + Kanaele unten) als Wegweiser und
+# schneidet die Stelle neu aus der Aufzeichnung - laenger, im Hochformat, mit Untertiteln.
+[vod]
+hours = 24              # wie weit zurueck gesucht wird
+max_clips = 15          # Clips pro Durchlauf
+per_channel = 4         # hoechstens so viele pro Streamer
+min_views = 100         # Zuschauer-Clips mit weniger Aufrufen ignorieren
+
 # Zusaetzlich oder stattdessen feste Kanaele: ein Block pro Streamer. cam = Facecam-Ausschnitt [x, y, breite, hoehe] als Anteil
 # des Bildes (0-1). Ohne Angabe wird die Facecam automatisch per Gesichtserkennung gesucht.
 # [[channel]]

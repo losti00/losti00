@@ -33,6 +33,17 @@ In `config.toml` unter `[auto]` `enabled = true` setzen und `client_id` / `clien
 Twitch-App eintragen (kostenlos: https://dev.twitch.tv/console/apps). Die Pipeline holt dann beim Start
 und alle 30 Minuten die zehn groessten Live-Streams der eingetragenen Spiele und clippt sie alle.
 
+## Clips aus schon gelaufenen Streams
+
+```bash
+python -m clipper vod
+```
+
+Holt ueber die offizielle Twitch-API die meistgesehenen Zuschauer-Clips der letzten 24 Stunden (nur Deutsch
+und Englisch), laedt die jeweilige Stelle mit etwas Vorlauf und Nachlauf aus der Aufzeichnung und macht
+daraus fertige Hochformat-Clips mit mindestens 61 Sekunden. Es wird immer nur der Ausschnitt geladen, nicht
+der ganze Stream - das klappt auch mit langsamer Leitung. Bereits verarbeitete Clips werden uebersprungen.
+
 ## Mehr Clips
 
 - mehr `[[channel]]`-Bloecke (jeder Stream braucht ca. 6–8 Mbit/s bei `best`, sonst `quality = "720p60,best"`)

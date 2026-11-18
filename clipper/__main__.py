@@ -1,6 +1,7 @@
 """Clip-Pipeline: Aufnahme -> Chat-Spike -> KI-Score -> 9:16 -> Telegram.
 
     python -m clipper              Pipeline starten
+    python -m clipper vod          Clips aus schon gelaufenen Streams (Zuschauer-Clips als Wegweiser)
     python -m clipper telegram     chat_id herausfinden / Bot testen
     python -m clipper selftest     Offline-Test mit Testbild (ohne Twitch)
 """
@@ -28,6 +29,7 @@ DEFAULTS = {
     "telegram": {"bot_token": "", "chat_id": ""},
     "auto": {"enabled": False, "games": ["Grand Theft Auto V", "Grand Theft Auto VI"], "top": 10,
              "languages": ["de", "en"], "refresh_minutes": 30, "client_id": "", "client_secret": ""},
+    "vod": {"hours": 24, "max_clips": 15, "per_channel": 4, "min_views": 100, "pages": 5},
     "channel": [],
 }
 
@@ -63,41 +65,114 @@ def process(cfg, spike, detector, buf_dir, wait=True):
             log.warning("[%s] Spike x%.1f, aber kein Video im Cache (Stream offline?)", ch, spike.ratio)
             return None
         messages = detector.between(ch, spike.t - cfg["detect"]["window"], t1) or spike.messages
-        words = score.transcribe(raw, cfg["ai"]["whisper_model"], g["language"])
-        s, title, source = score.score_clip(spike, messages, words, cfg["ai"], spike_at=spike.t - t0)
-        if s < g["min_score"]:
-            log.info("[%s] aussortiert: Score %d/10 (%s), Chat x%.1f", ch, s, source, spike.ratio)
-            if not g["keep_rejected"]:
-                raw.unlink(missing_ok=True)
-            return None
-        final = out_dir / f"{stamp}_score{s}.mp4"
-        dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
-                                    "csv=p=0", str(raw)], capture_output=True, text=True).stdout.strip() or 0)
-        if dur < g["min_clip_seconds"]:
-            log.info("[%s] verworfen: nur %.0f s Material im Cache (Stream gerade erst gestartet?)", ch, dur)
-            raw.unlink(missing_ok=True)
-            return None
-        a, b = render.fit_window(words, dur, g["min_clip_seconds"])
-        cam = chan_cfg.get("cam") or camdetect.detect_cam(raw, ch)
-        if not render.render_vertical(raw, final, cam, words, a, b):
-            log.warning("[%s] Clip konnte nicht gerendert werden, Rohdatei bleibt liegen: %s", ch, raw)
-            return None
-        raw.unlink(missing_ok=True)
-        meta = {"channel": ch, "time": stamp, "score": s, "score_source": source, "title": title,
-                "seconds": round(b - a, 1), "facecam": cam, "chat_ratio": round(spike.ratio, 1), "chat_count": spike.count,
-                "transcript": " ".join(w for _, _, w in words), "chat": messages[-40:]}
-        final.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-        final.with_suffix(".txt").write_text(title + "\n", encoding="utf-8")
-        caption = f"🎬 {ch} · {s}/10 · Chat x{spike.ratio:.1f}"
-        if title:
-            caption += f"\n{title}"
-        sent = notify.send_video(cfg, final, caption)
-        log.info("[%s] CLIP %s  %.0fs  Score %d/10 (%s)  Cam %s  \"%s\"%s", ch, final, b - a, s, source,
-                 "erkannt" if cam else "nicht gefunden", title, "  -> Telegram" if sent else "")
-        return final
+        return finish(cfg, raw, ch, stamp, spike, messages, spike.t - t0, g["min_clip_seconds"])
     except Exception:
         log.exception("[%s] Fehler bei der Clip-Verarbeitung", ch)
         return None
+
+
+def finish(cfg, raw, ch, stamp, spike, messages, spike_at, min_len, viewer=None):
+    """Rohschnitt -> bewerten, auf Sprechpausen kuerzen, Hochformat, Untertitel, Titel, Telegram."""
+    g = cfg["general"]
+    chan_cfg = next((c for c in cfg["channel"] if c["name"].lower() == ch), {})
+    words = score.transcribe(raw, cfg["ai"]["whisper_model"], g["language"])
+    s, title, source = score.score_clip(spike, messages, words, cfg["ai"], spike_at=spike_at, viewer=viewer)
+    why = f"{viewer['views']} Aufrufe" if viewer else f"Chat x{spike.ratio:.1f}"
+    if s < g["min_score"]:
+        log.info("[%s] aussortiert: Score %d/10 (%s), %s", ch, s, source, why)
+        if not g["keep_rejected"]:
+            raw.unlink(missing_ok=True)
+        return None
+    final = raw.with_name(f"{stamp}_score{s}.mp4")
+    dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                                "csv=p=0", str(raw)], capture_output=True, text=True).stdout.strip() or 0)
+    if dur < g["min_clip_seconds"]:
+        log.info("[%s] verworfen: nur %.0f s Material vorhanden", ch, dur)
+        raw.unlink(missing_ok=True)
+        return None
+    a, b = render.fit_window(words, dur, min(min_len, dur))
+    cam = chan_cfg.get("cam") or camdetect.detect_cam(raw, ch)
+    if not render.render_vertical(raw, final, cam, words, a, b):
+        log.warning("[%s] Clip konnte nicht gerendert werden, Rohdatei bleibt liegen: %s", ch, raw)
+        return None
+    raw.unlink(missing_ok=True)
+    meta = {"channel": ch, "time": stamp, "score": s, "score_source": source, "title": title,
+            "seconds": round(b - a, 1), "facecam": cam, "transcript": " ".join(w for _, _, w in words)}
+    meta.update({"viewer_clip": viewer} if viewer else
+                {"chat_ratio": round(spike.ratio, 1), "chat_count": spike.count, "chat": messages[-40:]})
+    final.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    final.with_suffix(".txt").write_text(title + "\n", encoding="utf-8")
+    caption = f"🎬 {ch} · {s}/10 · {why}" + (f"\n{title}" if title else "")
+    sent = notify.send_video(cfg, final, caption)
+    log.info("[%s] CLIP %s  %.0fs  Score %d/10 (%s)  Cam %s  \"%s\"%s", ch, final, b - a, s, source,
+             "erkannt" if cam else "nicht gefunden", title, "  -> Telegram" if sent else "")
+    return final
+
+
+def vod_one(cfg, clip):
+    """Ein Zuschauer-Clip -> die Stelle grosszuegig aus der Aufzeichnung laden und fertig verarbeiten."""
+    g = cfg["general"]
+    ch = (clip.get("broadcaster_name") or "unbekannt").lower().replace(" ", "")
+    out_dir = Path(g["out_dir"]) / ch
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = f"{clip.get('created_at', '')[:10]}_{clip['id'][:14]}"
+    raw = out_dir / f"{stamp}_raw.mp4"
+    lead, tail = 30, 25                                # Aufbau davor, Reaktion danach
+    start = max(0, int(clip["vod_offset"]) - lead)
+    lead = int(clip["vod_offset"]) - start
+    length = lead + float(clip.get("duration") or 30) + tail
+    length = max(length, g["min_clip_seconds"] + 20)
+    try:
+        if not recorder.download_vod_range(clip["video_id"], start, length, raw, g["quality"]):
+            log.warning("[%s] Aufzeichnung nicht ladbar (geloescht oder nur fuer Abonnenten): %s", ch, clip["url"])
+            return None
+        viewer = {"title": clip.get("title", ""), "views": clip.get("view_count", 0), "url": clip.get("url", "")}
+        fake = Spike(ch, time.time(), 0.0, 0)
+        return finish(cfg, raw, ch, stamp, fake, [], lead + float(clip.get("duration") or 30),
+                      max(g["min_clip_seconds"], length - 25), viewer=viewer)
+    except Exception:
+        log.exception("[%s] Fehler bei der Verarbeitung von %s", ch, clip.get("url"))
+        return None
+
+
+def vod(cfg):
+    """Clips aus bereits gelaufenen Streams: die meistgesehenen Zuschauer-Clips als Wegweiser nehmen."""
+    recorder.check_tools()
+    render.subtitles_supported()
+    v, g = cfg["vod"], cfg["general"]
+    done_file = Path(g["out_dir"]) / "_erledigt.txt"
+    done = set(done_file.read_text().split()) if done_file.exists() else set()
+    clips = discover.viewer_clips(cfg["auto"], v, [c["name"].lower() for c in cfg["channel"]])
+    picked, per_channel, spots = [], {}, []
+    for c in clips:
+        name = c.get("broadcaster_name", "")
+        spot = (c["video_id"], int(c["vod_offset"]))
+        if c["id"] in done:
+            spots.append(spot)                         # Szene gilt als erledigt, auch fuer aehnliche Clips
+            continue
+        if per_channel.get(name, 0) >= v["per_channel"]:
+            continue
+        if any(vid == spot[0] and abs(off - spot[1]) < 90 for vid, off in spots):
+            continue                                   # dieselbe Szene wurde schon gewaehlt
+        picked.append(c)
+        spots.append(spot)
+        per_channel[name] = per_channel.get(name, 0) + 1
+        if len(picked) >= v["max_clips"]:
+            break
+    if not picked:
+        log.info("Keine neuen Zuschauer-Clips gefunden.")
+        return
+    for c in picked:
+        log.info("Geplant: %-20s %7d Aufrufe  %s", c.get("broadcaster_name"), c.get("view_count", 0), c.get("title", "")[:60])
+    score.preload(cfg["ai"]["whisper_model"])
+    Path(g["out_dir"]).mkdir(parents=True, exist_ok=True)
+    made = 0
+    with ThreadPoolExecutor(max_workers=g["workers"]) as pool:
+        for c, result in zip(picked, pool.map(lambda c: vod_one(cfg, c), picked)):
+            made += bool(result)
+            with done_file.open("a") as f:
+                f.write(c["id"] + "\n")
+    log.info("Fertig: %d von %d Clips erstellt. Ordner: %s/", made, len(picked), g["out_dir"])
 
 
 def run(cfg):
@@ -219,6 +294,8 @@ def main():
         notify.print_chat_ids(cfg)
     elif cmd == "selftest":
         selftest(cfg)
+    elif cmd == "vod":
+        vod(cfg)
     elif cmd == "run":
         run(cfg)
     else:
