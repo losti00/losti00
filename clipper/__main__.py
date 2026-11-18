@@ -80,6 +80,7 @@ def process(cfg, spike, detector, buf_dir, wait=True):
         a, b = render.fit_window(words, dur, g["min_clip_seconds"])
         cam = chan_cfg.get("cam") or camdetect.detect_cam(raw, ch)
         if not render.render_vertical(raw, final, cam, words, a, b):
+            log.warning("[%s] Clip konnte nicht gerendert werden, Rohdatei bleibt liegen: %s", ch, raw)
             return None
         raw.unlink(missing_ok=True)
         meta = {"channel": ch, "time": stamp, "score": s, "score_source": source, "title": title,
@@ -101,6 +102,9 @@ def process(cfg, spike, detector, buf_dir, wait=True):
 
 def run(cfg):
     recorder.check_tools()
+    render.subtitles_supported()
+    for old in Path(cfg["general"]["out_dir"]).glob("*/*_raw.*"):  # Reste abgebrochener Laeufe
+        old.unlink(missing_ok=True)
     auto = cfg["auto"]
     if auto["enabled"]:
         known = {c["name"].lower() for c in cfg["channel"]}

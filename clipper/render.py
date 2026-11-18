@@ -5,6 +5,20 @@ import subprocess
 from pathlib import Path
 
 log = logging.getLogger("render")
+_subs_ok = None
+
+
+def subtitles_supported():
+    """Manche ffmpeg-Builds (z.B. das schlanke Homebrew-ffmpeg) haben keinen Untertitel-Filter (libass)."""
+    global _subs_ok
+    if _subs_ok is None:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+        _subs_ok = " subtitles " in out
+        if not _subs_ok:
+            log.warning("ACHTUNG: Dieses ffmpeg kann keine Untertitel einbrennen (libass fehlt). "
+                        "Clips werden OHNE Untertitel gerendert. Mac-Fix: brew install ffmpeg-full "
+                        "&& brew unlink ffmpeg && brew link --force ffmpeg-full")
+    return _subs_ok
 W, H, CAM_H = 1080, 1920, 720
 GAME_H = H - CAM_H
 
@@ -82,7 +96,7 @@ def render_vertical(src, dst, cam=None, words=None, start=0.0, end=None):
               f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=24:4[bg];"
               f"[b]scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
     ass = None
-    if words:
+    if words and subtitles_supported():
         ass = dst.with_suffix(".ass")
         write_ass(words, ass, bool(cam))
         fc += f";[v0]subtitles={ass.name}[v]"  # relativer Name + cwd: keine Pfad-Escapes noetig
@@ -98,5 +112,8 @@ def render_vertical(src, dst, cam=None, words=None, start=0.0, end=None):
         ass.unlink(missing_ok=True)
     if r.returncode != 0:
         log.warning("Render fehlgeschlagen: %s", r.stderr.strip()[-400:])
+        if ass:  # zweiter Versuch ohne Untertitel, damit der Clip nicht verloren geht
+            log.warning("Neuer Versuch ohne Untertitel")
+            return render_vertical(src, dst, cam, None, start, end)
         return False
     return True
