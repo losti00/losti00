@@ -28,11 +28,19 @@ ollama_model = "llama3.1:8b"            # "" = nur Chat-Heuristik als Score
 bot_token = ""          # oder Umgebungsvariable TELEGRAM_BOT_TOKEN
 chat_id = ""            # herausfinden mit: python -m clipper telegram
 
-# Ein Block pro Streamer. cam = Facecam-Ausschnitt [x, y, breite, hoehe] als Anteil
-# des Bildes (0-1). Ohne cam wird das Gameplay mittig auf unscharfem Hintergrund gezeigt.
-[[channel]]
-name = "streamer1"
-cam = [0.75, 0.0, 0.25, 0.25]
+# Automatisch die groessten Live-Streams eines Spiels clippen (offizielle Twitch-API).
+# Zugangsdaten kostenlos unter https://dev.twitch.tv/console/apps (App registrieren, Typ "Confidential").
+[auto]
+enabled = false
+games = ["Grand Theft Auto V", "Grand Theft Auto VI"]
+top = 10
+language = ""           # "de" = nur deutsche Streams, "" = weltweit
+refresh_minutes = 30    # neue Top-Streamer werden laufend dazugenommen
+client_id = ""          # oder Umgebungsvariable TWITCH_CLIENT_ID
+client_secret = ""      # oder TWITCH_CLIENT_SECRET
 
-[[channel]]
-name = "streamer2"
+# Zusaetzlich oder stattdessen feste Kanaele: ein Block pro Streamer. cam = Facecam-Ausschnitt [x, y, breite, hoehe] als Anteil
+# des Bildes (0-1). Ohne cam wird das Gameplay mittig auf unscharfem Hintergrund gezeigt.
+# [[channel]]
+# name = "streamer1"
+# cam = [0.75, 0.0, 0.25, 0.25]

@@ -27,6 +27,12 @@ python -m clipper                       # Pipeline starten
 `ollama pull llama3.1:8b`. Ohne Ollama wird der Score aus Chat-Tempo + Hype-Woertern berechnet,
 ohne `faster-whisper` gibt es keine Untertitel.
 
+## Top 10 GTA-Streamer automatisch
+
+In `config.toml` unter `[auto]` `enabled = true` setzen und `client_id` / `client_secret` einer eigenen
+Twitch-App eintragen (kostenlos: https://dev.twitch.tv/console/apps). Die Pipeline holt dann beim Start
+und alle 30 Minuten die zehn groessten Live-Streams der eingetragenen Spiele und clippt sie alle.
+
 ## Mehr Clips
 
 - mehr `[[channel]]`-Bloecke (jeder Stream braucht ca. 6–8 Mbit/s bei `best`, sonst `quality = "720p60,best"`)

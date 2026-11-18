@@ -83,6 +83,17 @@ class TwitchChat(threading.Thread):
         self.channels = [c.lower() for c in channels]
         self.detector = detector
         self.connected = False
+        self.sock = None
+
+    def add(self, channel):
+        """Neuen Kanal aufnehmen: Verbindung wird neu aufgebaut und tritt allen Kanaelen bei."""
+        if channel.lower() not in self.channels:
+            self.channels.append(channel.lower())
+            if self.sock:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
 
     def run(self):
         while True:
@@ -96,6 +107,7 @@ class TwitchChat(threading.Thread):
     def _loop(self):
         raw = socket.create_connection(("irc.chat.twitch.tv", 6697), timeout=30)
         s = ssl.create_default_context().wrap_socket(raw, server_hostname="irc.chat.twitch.tv")
+        self.sock = s
         s.settimeout(360)  # Twitch pingt ca. alle 5 Minuten
         s.sendall(b"NICK justinfan73914\r\n")
         for i in range(0, len(self.channels), 15):  # Join-Limit: 20 pro 10 s

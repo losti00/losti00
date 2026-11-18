@@ -14,7 +14,7 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import notify, recorder, render, score
+from . import discover, notify, recorder, render, score
 from .chat import Detector, Spike, TwitchChat
 
 log = logging.getLogger("clipper")
@@ -26,6 +26,8 @@ DEFAULTS = {
     "detect": {"window": 10, "baseline": 120, "factor": 3.0, "min_messages": 8, "cooldown": 40},
     "ai": {"whisper_model": "small", "ollama_url": "http://localhost:11434", "ollama_model": "llama3.1:8b"},
     "telegram": {"bot_token": "", "chat_id": ""},
+    "auto": {"enabled": False, "games": ["Grand Theft Auto V", "Grand Theft Auto VI"], "top": 10,
+             "language": "", "refresh_minutes": 30, "client_id": "", "client_secret": ""},
     "channel": [],
 }
 
@@ -88,9 +90,13 @@ def process(cfg, spike, detector, buf_dir, wait=True):
 
 
 def run(cfg):
-    if not cfg["channel"]:
-        raise SystemExit("Keine Kanaele. config.example.toml nach config.toml kopieren und [[channel]] eintragen.")
     recorder.check_tools()
+    auto = cfg["auto"]
+    if auto["enabled"]:
+        known = {c["name"].lower() for c in cfg["channel"]}
+        cfg["channel"] += [{"name": n} for n in discover.top_channels(auto) if n not in known]
+    if not cfg["channel"]:
+        raise SystemExit("Keine Kanaele. In config.toml [[channel]] eintragen oder [auto] aktivieren.")
     buf_dir = Path("buffer")
     names = [c["name"].lower() for c in cfg["channel"]]
     detector = Detector(**cfg["detect"])
@@ -101,7 +107,7 @@ def run(cfg):
     if not notify.token(cfg) or not cfg["telegram"]["chat_id"]:
         log.warning("Telegram nicht konfiguriert - Clips landen nur in %s/", cfg["general"]["out_dir"])
     log.info("Pipeline laeuft fuer %d Kanaele. Strg+C zum Beenden.", len(names))
-    last_status = time.time()
+    last_status = last_refresh = time.time()
     try:
         while True:
             time.sleep(1)
@@ -109,6 +115,17 @@ def run(cfg):
                 log.info("[%s] CLIP-MOMENT! Chat x%.1f (%d Nachrichten/%ds)", spike.channel, spike.ratio,
                          spike.count, cfg["detect"]["window"])
                 pool.submit(process, cfg, spike, detector, buf_dir)
+            if auto["enabled"] and time.time() - last_refresh > auto["refresh_minutes"] * 60:
+                last_refresh = time.time()
+                try:
+                    for n in discover.top_channels(auto):
+                        if n not in names:
+                            names.append(n)
+                            cfg["channel"].append({"name": n})
+                            recs += recorder.start_recorders({**cfg, "channel": [{"name": n}]}, buf_dir)
+                            chat.add(n)
+                except Exception as e:
+                    log.warning("Top-Streams konnten nicht aktualisiert werden: %s", e)
             if time.time() - last_status > 300:
                 last_status = time.time()
                 log.info("Status: live=%s | Chat %s | Warteschlange %d",
