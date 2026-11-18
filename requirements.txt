@@ -3,3 +3,5 @@ streamlink>=6.0
 faster-whisper>=1.0
 # Facecam-Erkennung:
 opencv-python-headless>=4.8,<5
+# Headline im Video:
+pillow>=10.1

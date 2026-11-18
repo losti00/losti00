@@ -19,8 +19,57 @@ def subtitles_supported():
                         "Clips werden OHNE Untertitel gerendert. Mac-Fix: brew install ffmpeg-full "
                         "&& brew unlink ffmpeg && brew link --force ffmpeg-full")
     return _subs_ok
-W, H, CAM_H = 1080, 1920, 720
-GAME_H = H - CAM_H
+W, H = 1080, 1920
+HEAD_H, CAM_H = 220, 640          # oben: Headline-Balken, darunter Facecam, Rest Gameplay
+GAME_H = H - HEAD_H - CAM_H
+FONTS = [
+    "/System/Library/Fonts/Supplemental/Impact.ttf", "/System/Library/Fonts/Supplemental/Arial Black.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/Library/Fonts/Arial Bold.ttf",
+    "/System/Library/Fonts/Helvetica.ttc", "C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/opentype/inter/InterDisplay-Bold.otf",
+]
+_pil_warned = False
+
+
+def make_headline(text, path, opaque):
+    """Headline als PNG (1080 x HEAD_H). Kommt per overlay ins Video - braucht also kein libass."""
+    global _pil_warned
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        if not _pil_warned:
+            log.warning("Pillow nicht installiert -> keine Headline im Video (pip install pillow)")
+            _pil_warned = True
+        return False
+    text = " ".join(text.upper().split())
+    font_file = next((f for f in FONTS if Path(f).exists()), None)
+
+    def font(size):
+        return ImageFont.truetype(font_file, size) if font_file else ImageFont.load_default(size)
+
+    img = Image.new("RGBA", (W, HEAD_H), (12, 12, 14, 255) if opaque else (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    words, lines, f = text.split(), [text], font(44)
+    for size in range(104, 40, -4):                    # groesste Schrift, die in max. 2 Zeilen passt
+        f = font(size)
+        fits = lambda t: draw.textlength(t, font=f) <= W - 70
+        if fits(text):
+            lines = [text]
+            break
+        split = [(" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words))]
+        split = [p for p in split if fits(p[0]) and fits(p[1])]
+        if split and size * 2.2 <= HEAD_H - 16:
+            lines = list(min(split, key=lambda p: abs(len(p[0]) - len(p[1]))))
+            break
+    line_h = f.size * 1.08
+    y = (HEAD_H - line_h * len(lines)) / 2
+    for i, line in enumerate(lines):
+        x = (W - draw.textlength(line, font=f)) / 2
+        colour = (255, 230, 0, 255) if (i == len(lines) - 1 and len(lines) > 1) else (255, 255, 255, 255)
+        draw.text((x, y + i * line_h), line, font=f, fill=colour,
+                  stroke_width=0 if opaque else max(4, f.size // 12), stroke_fill=(0, 0, 0, 255))
+    img.save(path)
+    return True
 
 
 def _ts(t):
@@ -30,7 +79,7 @@ def _ts(t):
 
 def write_ass(words, path, has_cam):
     """Zeigt je 3 Woerter, das gerade gesprochene farbig hervorgehoben."""
-    margin_v = H - CAM_H - 70 if has_cam else 380
+    margin_v = H - HEAD_H - CAM_H - 70 if has_cam else 380
     head = (
         "[Script Info]\nScriptType: v4.00+\n"
         f"PlayResX: {W}\nPlayResY: {H}\nWrapStyle: 2\n\n"
@@ -78,8 +127,9 @@ def fit_window(words, duration, min_len):
     return start, end
 
 
-def render_vertical(src, dst, cam=None, words=None, start=0.0, end=None):
+def render_vertical(src, dst, cam=None, words=None, start=0.0, end=None, headline=""):
     """cam = [x, y, w, h] als Bildanteile (0-1) oder None. Gibt True bei Erfolg."""
+    all_words = words
     if words:
         words = [(s - start, e - start, w) for s, e, w in words if s >= start and (end is None or e <= end)]
     cut = ["-ss", f"{start:.2f}"] + (["-t", f"{end - start:.2f}"] if end else [])
@@ -90,30 +140,40 @@ def render_vertical(src, dst, cam=None, words=None, start=0.0, end=None):
               f"[a]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale={W}:{CAM_H}:force_original_aspect_ratio=increase,"
               f"crop={W}:{CAM_H}[cam];"
               f"[b]scale=-2:{GAME_H},crop={W}:{GAME_H}[game];"
-              f"[cam][game]vstack[v0]")
+              f"[cam][game]vstack,pad={W}:{H}:0:{HEAD_H}:black[v0]")
+        head_y = 0
     else:
         fc = (f"[0:v]split[a][b];"
               f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=24:4[bg];"
               f"[b]scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
+        head_y = 390                                   # im unscharfen Bereich ueber dem Bild
+    inputs = [*cut, "-i", str(src)]
+    png = dst.with_suffix(".png")
+    if headline and make_headline(headline, png, opaque=bool(cam)):
+        inputs += ["-i", png.name]
+        fc += f";[v0][1:v]overlay=0:{head_y}[v1]"
+    else:
+        fc += ";[v0]null[v1]"
     ass = None
     if words and subtitles_supported():
         ass = dst.with_suffix(".ass")
         write_ass(words, ass, bool(cam))
-        fc += f";[v0]subtitles={ass.name}[v]"  # relativer Name + cwd: keine Pfad-Escapes noetig
+        fc += f";[v1]subtitles={ass.name}[v]"  # relativer Name + cwd: keine Pfad-Escapes noetig
     else:
-        fc += ";[v0]null[v]"
+        fc += ";[v1]null[v]"
     r = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *cut, "-i", str(src), "-filter_complex", fc,
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *inputs, "-filter_complex", fc,
          "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
          "-maxrate", "6M", "-bufsize", "12M", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
          "-movflags", "+faststart", dst.name],
         cwd=dst.parent, capture_output=True, text=True)
-    if ass:
-        ass.unlink(missing_ok=True)
+    for tmp in (ass, png):
+        if tmp:
+            tmp.unlink(missing_ok=True)
     if r.returncode != 0:
         log.warning("Render fehlgeschlagen: %s", r.stderr.strip()[-400:])
         if ass:  # zweiter Versuch ohne Untertitel, damit der Clip nicht verloren geht
             log.warning("Neuer Versuch ohne Untertitel")
-            return render_vertical(src, dst, cam, None, start, end)
+            return render_vertical(src, dst, cam, None, start, end, headline)
         return False
     return True

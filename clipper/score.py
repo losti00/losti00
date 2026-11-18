@@ -12,6 +12,19 @@ from .chat import hype_fraction
 log = logging.getLogger("score")
 _model, _model_lock = None, threading.Lock()
 _whisper_failed = False
+languages = {}   # Pfad -> von Whisper erkannte Sprache ("de", "en", ...)
+
+HEADLINES = {
+    "de": ["DAMIT HAT {n} NICHT GERECHNET", "{n} KANN ES SELBST NICHT GLAUBEN", "DER CHAT RASTET KOMPLETT AUS",
+           "WAS IST HIER GERADE PASSIERT?!", "{n} VERLIERT KOMPLETT DIE NERVEN", "DAS HAT NOCH KEINER GESEHEN"],
+    "en": ["{n} DID NOT SEE THIS COMING", "{n} CAN'T BELIEVE WHAT JUST HAPPENED", "CHAT WENT ABSOLUTELY INSANE",
+           "WAIT... WHAT JUST HAPPENED?!", "{n} COMPLETELY LOSES IT", "NOBODY EXPECTED THIS"],
+}
+
+
+def fallback_headline(channel, lang, seed):
+    pool = HEADLINES.get(lang, HEADLINES["en"])
+    return pool[sum(map(ord, str(seed))) % len(pool)].format(n=channel.upper())
 
 
 def preload(model_name):
@@ -70,8 +83,9 @@ def transcribe(path, model_name, language):
             audio = _audio(path)
             if audio.size < 16000:
                 return []
-            segs, _ = _model.transcribe(audio, language=language or None, word_timestamps=True,
-                                        vad_filter=True)
+            segs, info = _model.transcribe(audio, language=language or None, word_timestamps=True,
+                                           vad_filter=True)
+            languages[str(path)] = info.language
             return [(w.start, w.end, w.word.strip()) for s in segs for w in (s.words or []) if w.word.strip()]
         except ImportError:
             log.warning("faster-whisper nicht installiert -> kein Transkript, keine Untertitel")
@@ -99,16 +113,17 @@ def fallback_title(spike, words, spike_at):
     return (text[:70] if len(text) > 8 else f"{spike.channel} rastet aus").strip()
 
 
-def score_clip(spike, messages, words, ai, spike_at=0.0, viewer=None):
-    """Gibt (score, titel, quelle) zurueck. viewer = {"title", "views"} bei Zuschauer-Clips."""
+def score_clip(spike, messages, words, ai, spike_at=0.0, viewer=None, lang="de"):
+    """Gibt (score, titel, headline, quelle) zurueck. viewer = {"title", "views"} bei Zuschauer-Clips."""
     h = 8 if viewer else heuristic(spike, messages)
     fb = (viewer or {}).get("title") or fallback_title(spike, words, spike_at)
+    fh = fallback_headline(spike.channel, lang, fb)
     if not ai.get("ollama_model"):
-        return h, fb, "zuschauer" if viewer else "chat"
+        return h, fb, fh, "zuschauer" if viewer else "chat"
     transcript = " ".join(w for _, _, w in words)[:1500] or "(kein Transkript)"
     prompt = (
         "Du bewertest Livestream-Clips fuer TikTok. Gib NUR JSON zurueck: "
-        '{"score": <1-10>, "title": "<kurzer TikTok-Titel mit Hook, max 60 Zeichen, in der Sprache des Streamers (Deutsch oder Englisch), beschreibt was passiert, kein Clickbait ohne Bezug>"}.\n'
+        '{"score": <1-10>, "title": "<kurzer TikTok-Titel mit Hook, max 60 Zeichen, in der Sprache des Streamers (Deutsch oder Englisch), beschreibt was passiert>", "headline": "<Einblendung im Video: max 38 Zeichen, GROSSBUCHSTABEN, maximal neugierig machend und zugespitzt (Clickbait-Stil: offene Frage, Schock, Cliffhanger), gleiche Sprache wie der Streamer, keine Emojis. Muss zu dem passen, was wirklich passiert - nichts erfinden, was nicht im Clip vorkommt>"}.\n'
         "Zieh Punkte ab, wenn der Ausschnitt ohne Vorwissen keinen Sinn ergibt.\n"
         "10 = extrem viral (lustig, schockierend, krasser Fail/Win, emotionale Reaktion), "
         "1 = langweilig.\n\n" + (
@@ -122,7 +137,7 @@ def score_clip(spike, messages, words, ai, spike_at=0.0, viewer=None):
         model = _ollama_model(ai)
         if not model:
             log.warning("Ollama laeuft, hat aber kein Modell. Einmalig ausfuehren: ollama pull %s", ai["ollama_model"])
-            return h, fb, "zuschauer" if viewer else "chat"
+            return h, fb, fh, "zuschauer" if viewer else "chat"
         req = urllib.request.Request(
             ai["ollama_url"].rstrip("/") + "/api/generate",
             data=json.dumps({"model": model, "prompt": prompt, "stream": False,
@@ -133,7 +148,7 @@ def score_clip(spike, messages, words, ai, spike_at=0.0, viewer=None):
         ki = max(1, min(10, round(float(data["score"]))))
         if viewer:  # die Zuschauer haben schon abgestimmt - die KI darf nur noch mitreden
             ki = round((ki + h) / 2)
-        return ki, (str(data.get("title", "")).strip()[:80] or fb), "ki"
+        return ki, (str(data.get("title", "")).strip()[:80] or fb), (str(data.get("headline", "")).strip()[:48] or fh), "ki"
     except Exception as e:
         log.warning("Ollama nicht erreichbar (%s) -> Chat-Heuristik", e)
-        return h, fb, "zuschauer" if viewer else "chat"
+        return h, fb, fh, "zuschauer" if viewer else "chat"

@@ -76,7 +76,9 @@ def finish(cfg, raw, ch, stamp, spike, messages, spike_at, min_len, viewer=None)
     g = cfg["general"]
     chan_cfg = next((c for c in cfg["channel"] if c["name"].lower() == ch), {})
     words = score.transcribe(raw, cfg["ai"]["whisper_model"], g["language"])
-    s, title, source = score.score_clip(spike, messages, words, cfg["ai"], spike_at=spike_at, viewer=viewer)
+    lang = score.languages.pop(str(raw), g["language"] or "de")
+    s, title, headline, source = score.score_clip(spike, messages, words, cfg["ai"], spike_at=spike_at,
+                                                  viewer=viewer, lang=lang)
     why = f"{viewer['views']} Aufrufe" if viewer else f"Chat x{spike.ratio:.1f}"
     if s < g["min_score"]:
         log.info("[%s] aussortiert: Score %d/10 (%s), %s", ch, s, source, why)
@@ -92,11 +94,11 @@ def finish(cfg, raw, ch, stamp, spike, messages, spike_at, min_len, viewer=None)
         return None
     a, b = render.fit_window(words, dur, min(min_len, dur))
     cam = chan_cfg.get("cam") or camdetect.detect_cam(raw, ch)
-    if not render.render_vertical(raw, final, cam, words, a, b):
+    if not render.render_vertical(raw, final, cam, words, a, b, headline):
         log.warning("[%s] Clip konnte nicht gerendert werden, Rohdatei bleibt liegen: %s", ch, raw)
         return None
     raw.unlink(missing_ok=True)
-    meta = {"channel": ch, "time": stamp, "score": s, "score_source": source, "title": title,
+    meta = {"channel": ch, "time": stamp, "score": s, "score_source": source, "title": title, "headline": headline,
             "seconds": round(b - a, 1), "facecam": cam, "transcript": " ".join(w for _, _, w in words)}
     meta.update({"viewer_clip": viewer} if viewer else
                 {"chat_ratio": round(spike.ratio, 1), "chat_count": spike.count, "chat": messages[-40:]})
@@ -105,7 +107,7 @@ def finish(cfg, raw, ch, stamp, spike, messages, spike_at, min_len, viewer=None)
     caption = f"🎬 {ch} · {s}/10 · {why}" + (f"\n{title}" if title else "")
     sent = notify.send_video(cfg, final, caption)
     log.info("[%s] CLIP %s  %.0fs  Score %d/10 (%s)  Cam %s  \"%s\"%s", ch, final, b - a, s, source,
-             "erkannt" if cam else "nicht gefunden", title, "  -> Telegram" if sent else "")
+             "erkannt" if cam else "nicht gefunden", headline, "  -> Telegram" if sent else "")
     return final
 
 
