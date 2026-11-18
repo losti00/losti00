@@ -123,6 +123,7 @@ def run(cfg):
         log.warning("Telegram nicht konfiguriert - Clips landen nur in %s/", cfg["general"]["out_dir"])
     log.info("Pipeline laeuft fuer %d Kanaele. Strg+C zum Beenden.", len(names))
     last_status = last_refresh = time.time()
+    slow_checks = 0
     try:
         while True:
             time.sleep(1)
@@ -134,7 +135,7 @@ def run(cfg):
                 last_refresh = time.time()
                 try:
                     for n in discover.top_channels(auto):
-                        if n not in names:
+                        if n not in names and len([r for r in recs if not r.stopped]) < auto["top"]:
                             names.append(n)
                             cfg["channel"].append({"name": n})
                             recs += recorder.start_recorders({**cfg, "channel": [{"name": n}]}, buf_dir)
@@ -144,12 +145,25 @@ def run(cfg):
             if time.time() - last_status > 180:
                 last_status = time.time()
                 log.info("Status: live=%s | Chat %s | Warteschlange %d",
-                         ",".join(r.channel for r in recs if r.live) or "-",
+                         ",".join(r.channel for r in recs if r.live and not r.stopped) or "-",
                          "ok" if chat.connected else "GETRENNT", pool._work_queue.qsize())
-                slow = [f"{r.channel} {r.speed() * 100:.0f}%" for r in recs if r.speed() < 0.85]
-                if slow:
-                    log.warning("Video kommt zu langsam oder gar nicht an: %s  -> Stream offline ODER Leitung "
-                                "ueberlastet. Dann in config.toml [auto] top senken.", ", ".join(slow))
+                active = [r for r in recs if not r.stopped]
+                stats = {r.channel: r.speed() for r in active}
+                log.info("Empfang: %s | gesamt %.1f Mbit/s", "  ".join(
+                    f"{c} {v[0] * 100:.0f}% ({v[1]:.1f} Mbit/s)" for c, v in stats.items()),
+                    sum(v[1] for v in stats.values()))
+                for r in active:
+                    if stats[r.channel][0] < 0.5 and r.last_error():
+                        log.warning("[%s] streamlink meldet: %s", r.channel, r.last_error())
+                avg = sum(v[0] for v in stats.values()) / max(len(stats), 1)
+                slow_checks = slow_checks + 1 if avg < 0.85 else 0
+                if slow_checks >= 2 and len(active) > 1:
+                    victim = active[-1]
+                    victim.stop()
+                    auto["top"] = max(1, len(active) - 1)
+                    slow_checks = 0
+                    log.warning("Leitung haelt nicht mit (im Schnitt %.0f%% Echtzeit) -> Aufnahme von %s gestoppt, "
+                                "weiter mit %d Streams.", avg * 100, victim.channel, len(active) - 1)
     except KeyboardInterrupt:
         log.info("Beende ...")
         os._exit(0)
