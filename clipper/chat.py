@@ -36,7 +36,8 @@ class Detector:
     def feed(self, channel, text, ts=None):
         ts = ts or time.time()
         with self.lock:
-            self.msgs.setdefault(channel, deque()).append((ts, text))
+            q = self.msgs.setdefault(channel, deque())
+            q.append((max(ts, q[-1][0]) if q else ts, text))  # Reihenfolge monoton halten
             self.first.setdefault(channel, ts)
 
     def between(self, channel, a, b):
@@ -51,21 +52,25 @@ class Detector:
             for ch, q in self.msgs.items():
                 while q and q[0][0] < now - self.window - self.baseline - 60:
                     q.popleft()
+                if not q:
+                    continue
+                # Hinkt der Chat hinterher, zaehlt die Zeit der letzten Nachricht, nicht die Wanduhr
+                ref = now if now - q[-1][0] < 3 else q[-1][0]
                 # Warm-up: erst nach einer Minute Chat-Historie bewerten
-                if now - self.first[ch] < self.window + 60:
+                if ref - self.first[ch] < self.window + 60:
                     continue
-                if now - self.last_trigger.get(ch, 0) < self.cooldown:
+                if ref - self.last_trigger.get(ch, 0) < self.cooldown:
                     continue
-                w0 = now - self.window
-                recent = [m for t, m in q if t > w0]
+                w0 = ref - self.window
+                recent = [m for t, m in q if w0 < t <= ref]
                 if len(recent) < self.min_messages:
                     continue
                 span = min(self.baseline, w0 - self.first[ch])
                 base = sum(1 for t, _ in q if w0 - span < t <= w0) / span * self.window
                 ratio = len(recent) / max(base, 1.0)
                 if ratio >= self.factor:
-                    self.last_trigger[ch] = now
-                    spikes.append(Spike(ch, now, ratio, len(recent), recent[-40:]))
+                    self.last_trigger[ch] = ref
+                    spikes.append(Spike(ch, ref, ratio, len(recent), recent[-40:]))
         return spikes
 
 
@@ -73,6 +78,22 @@ def hype_fraction(messages):
     if not messages:
         return 0.0
     return sum(1 for m in messages if HYPE.search(m) or (m.isupper() and len(m) > 2)) / len(messages)
+
+
+def parse_privmsg(line, now=None):
+    """Liefert (kanal, text, zeit) oder None. Nutzt Twitchs Sendezeit (tmi-sent-ts), damit Nachrichten,
+    die wegen einer lahmen Leitung gebuendelt ankommen, nicht wie ein Chat-Spike aussehen."""
+    now = now or time.time()
+    ts = now
+    if line.startswith("@"):
+        tags, _, line = line.partition(" ")
+        m = re.search(r"tmi-sent-ts=(\d+)", tags)
+        if m and abs(int(m.group(1)) / 1000 - now) < 300:
+            ts = min(now, int(m.group(1)) / 1000)
+    parts = line.split(" ", 3)
+    if len(parts) == 4 and parts[1] == "PRIVMSG":
+        return parts[2].lstrip("#"), parts[3][1:], ts
+    return None
 
 
 class TwitchChat(threading.Thread):
@@ -109,7 +130,7 @@ class TwitchChat(threading.Thread):
         s = ssl.create_default_context().wrap_socket(raw, server_hostname="irc.chat.twitch.tv")
         self.sock = s
         s.settimeout(360)  # Twitch pingt ca. alle 5 Minuten
-        s.sendall(b"NICK justinfan73914\r\n")
+        s.sendall(b"CAP REQ :twitch.tv/tags\r\nNICK justinfan73914\r\n")
         for i in range(0, len(self.channels), 15):  # Join-Limit: 20 pro 10 s
             s.sendall(("JOIN " + ",".join("#" + c for c in self.channels[i:i + 15]) + "\r\n").encode())
             if i + 15 < len(self.channels):
@@ -128,6 +149,6 @@ class TwitchChat(threading.Thread):
                 if line.startswith("PING"):
                     s.sendall(b"PONG :tmi.twitch.tv\r\n")
                     continue
-                parts = line.split(" ", 3)
-                if len(parts) == 4 and parts[1] == "PRIVMSG":
-                    self.detector.feed(parts[2].lstrip("#"), parts[3][1:])
+                parsed = parse_privmsg(line)
+                if parsed:
+                    self.detector.feed(*parsed)

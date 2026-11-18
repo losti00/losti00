@@ -1,7 +1,7 @@
 # Kopieren nach config.toml und anpassen.
 
 [general]
-quality = "best"        # z.B. "720p60,720p,best" wenn Bandbreite/CPU knapp wird
+quality = "720p60,720p,best"   # ca. 4 Mbit/s pro Stream; "best" (1080p) braucht ca. 8 Mbit/s pro Stream
 buffer_seconds = 300    # lokaler Cache: letzte 5 Minuten pro Stream
 segment_seconds = 10
 pre_seconds = 55        # Material VOR dem Chat-Spike (Aufbau des Moments)
@@ -34,7 +34,7 @@ chat_id = ""            # herausfinden mit: python -m clipper telegram
 [auto]
 enabled = false
 games = ["Grand Theft Auto V", "Grand Theft Auto VI"]
-top = 10
+top = 5                 # Anzahl Streams. Faustregel: Download-Mbit/s geteilt durch 5
 languages = ["de", "en"] # nur deutsch- und englischsprachige Streams
 refresh_minutes = 30    # neue Top-Streamer werden laufend dazugenommen
 client_id = ""          # oder Umgebungsvariable TWITCH_CLIENT_ID

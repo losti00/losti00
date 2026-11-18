@@ -20,7 +20,7 @@ from .chat import Detector, Spike, TwitchChat
 log = logging.getLogger("clipper")
 
 DEFAULTS = {
-    "general": {"quality": "best", "buffer_seconds": 300, "segment_seconds": 10, "pre_seconds": 55,
+    "general": {"quality": "720p60,720p,best", "buffer_seconds": 300, "segment_seconds": 10, "pre_seconds": 55,
                 "post_seconds": 25, "min_clip_seconds": 61, "min_score": 6, "workers": 2, "language": "", "out_dir": "clips",
                 "keep_rejected": False},
     "detect": {"window": 10, "baseline": 120, "factor": 3.0, "min_messages": 8, "cooldown": 40},
@@ -145,6 +145,10 @@ def run(cfg):
                 log.info("Status: live=%s | Chat %s | Warteschlange %d",
                          ",".join(r.channel for r in recs if r.live) or "-",
                          "ok" if chat.connected else "GETRENNT", pool._work_queue.qsize())
+                dead = [r.channel for r in recs if not r.live]
+                if dead:
+                    log.warning("Kein Video von: %s  (offline - oder Leitung zu langsam: dann [auto] top "
+                                "senken bzw. quality reduzieren)", ", ".join(dead))
     except KeyboardInterrupt:
         log.info("Beende ...")
         os._exit(0)
