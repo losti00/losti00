@@ -14,20 +14,20 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import discover, notify, recorder, render, score
+from . import cam as camdetect, discover, notify, recorder, render, score
 from .chat import Detector, Spike, TwitchChat
 
 log = logging.getLogger("clipper")
 
 DEFAULTS = {
-    "general": {"quality": "best", "buffer_seconds": 300, "segment_seconds": 10, "pre_seconds": 30,
-                "post_seconds": 15, "min_score": 6, "workers": 2, "language": "de", "out_dir": "clips",
+    "general": {"quality": "best", "buffer_seconds": 300, "segment_seconds": 10, "pre_seconds": 55,
+                "post_seconds": 25, "min_clip_seconds": 61, "min_score": 6, "workers": 2, "language": "", "out_dir": "clips",
                 "keep_rejected": False},
     "detect": {"window": 10, "baseline": 120, "factor": 3.0, "min_messages": 8, "cooldown": 40},
     "ai": {"whisper_model": "small", "ollama_url": "http://localhost:11434", "ollama_model": "llama3.1:8b"},
     "telegram": {"bot_token": "", "chat_id": ""},
     "auto": {"enabled": False, "games": ["Grand Theft Auto V", "Grand Theft Auto VI"], "top": 10,
-             "language": "", "refresh_minutes": 30, "client_id": "", "client_secret": ""},
+             "languages": ["de", "en"], "refresh_minutes": 30, "client_id": "", "client_secret": ""},
     "channel": [],
 }
 
@@ -64,25 +64,35 @@ def process(cfg, spike, detector, buf_dir, wait=True):
             return None
         messages = detector.between(ch, spike.t - cfg["detect"]["window"], t1) or spike.messages
         words = score.transcribe(raw, cfg["ai"]["whisper_model"], g["language"])
-        s, title, source = score.score_clip(spike, messages, words, cfg["ai"])
+        s, title, source = score.score_clip(spike, messages, words, cfg["ai"], spike_at=spike.t - t0)
         if s < g["min_score"]:
             log.info("[%s] aussortiert: Score %d/10 (%s), Chat x%.1f", ch, s, source, spike.ratio)
             if not g["keep_rejected"]:
                 raw.unlink(missing_ok=True)
             return None
         final = out_dir / f"{stamp}_score{s}.mp4"
-        if not render.render_vertical(raw, final, chan_cfg.get("cam"), words):
+        dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                                    "csv=p=0", str(raw)], capture_output=True, text=True).stdout.strip() or 0)
+        if dur < g["min_clip_seconds"]:
+            log.info("[%s] verworfen: nur %.0f s Material im Cache (Stream gerade erst gestartet?)", ch, dur)
+            raw.unlink(missing_ok=True)
+            return None
+        a, b = render.fit_window(words, dur, g["min_clip_seconds"])
+        cam = chan_cfg.get("cam") or camdetect.detect_cam(raw, ch)
+        if not render.render_vertical(raw, final, cam, words, a, b):
             return None
         raw.unlink(missing_ok=True)
         meta = {"channel": ch, "time": stamp, "score": s, "score_source": source, "title": title,
-                "chat_ratio": round(spike.ratio, 1), "chat_count": spike.count,
+                "seconds": round(b - a, 1), "facecam": cam, "chat_ratio": round(spike.ratio, 1), "chat_count": spike.count,
                 "transcript": " ".join(w for _, _, w in words), "chat": messages[-40:]}
         final.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+        final.with_suffix(".txt").write_text(title + "\n", encoding="utf-8")
         caption = f"🎬 {ch} · {s}/10 · Chat x{spike.ratio:.1f}"
         if title:
             caption += f"\n{title}"
         sent = notify.send_video(cfg, final, caption)
-        log.info("[%s] CLIP %s  Score %d/10 (%s)%s", ch, final, s, source, "  -> Telegram" if sent else "")
+        log.info("[%s] CLIP %s  %.0fs  Score %d/10 (%s)  Cam %s  \"%s\"%s", ch, final, b - a, s, source,
+                 "erkannt" if cam else "nicht gefunden", title, "  -> Telegram" if sent else "")
         return final
     except Exception:
         log.exception("[%s] Fehler bei der Clip-Verarbeitung", ch)
@@ -144,25 +154,26 @@ def selftest(cfg):
     (buf_dir / ch).mkdir(parents=True)
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30",
-         "-f", "lavfi", "-i", "sine=frequency=440", "-t", "70", "-c:v", "libx264", "-preset", "ultrafast",
+         "-f", "lavfi", "-i", "sine=frequency=440", "-t", "120", "-c:v", "libx264", "-preset", "ultrafast",
          "-g", "60", "-c:a", "aac", "-f", "segment", "-segment_time", "10", "-segment_format", "mpegts",
          str(buf_dir / ch / "0_%06d.ts")], check=True)
     now = time.time()
     for i, f in enumerate(sorted((buf_dir / ch).glob("*.ts"))):
-        os.utime(f, (now - 70 + (i + 1) * 10,) * 2)
+        os.utime(f, (now - 120 + (i + 1) * 10,) * 2)
     det = Detector(**cfg["detect"])
-    t = now - 200
-    while t < now - 40:  # ruhiger Chat
+    t = now - 250
+    while t < now - 50:  # ruhiger Chat
         det.feed(ch, "hallo", t)
         t += 2.5
     for i in range(40):  # Explosion
-        det.feed(ch, ["KEKW", "NEIN WAY", "CLIP DAS", "WAAAS", "krank"][i % 5], now - 39 + i * 0.2)
-    spikes = det.tick(now - 30)
+        det.feed(ch, ["KEKW", "NEIN WAY", "CLIP DAS", "WAAAS", "krank"][i % 5], now - 49 + i * 0.2)
+    spikes = det.tick(now - 40)
     assert spikes, "Spike wurde nicht erkannt"
     print(f"1/3 Spike erkannt: x{spikes[0].ratio:.1f}, {spikes[0].count} Nachrichten")
-    cfg["channel"] = [{"name": ch, "cam": [0.7, 0.0, 0.3, 0.3]}]
+    cfg["channel"] = [{"name": ch}]
     cfg["general"]["min_score"] = 1
-    fake_words = [(1 + i * 0.4, 1.35 + i * 0.4, w) for i, w in enumerate("Das ist ein Test der Untertitel Wort für Wort".split())]
+    fake_words = [(3 + i * 0.5 + (i // 6) * 1.2, 3.4 + i * 0.5 + (i // 6) * 1.2, w + ("." if i % 6 == 5 else ""))
+                  for i, w in enumerate(("Das ist ein Test der Untertitel " * 22).split())]
     orig = score.transcribe
     score.transcribe = lambda *a, **k: orig(*a, **k) or fake_words
     out = process(cfg, spikes[0], det, buf_dir, wait=False)

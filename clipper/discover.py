@@ -29,8 +29,8 @@ def top_channels(auto):
         log.warning("Kein Spiel gefunden fuer %s", auto["games"])
         return []
     params = [("game_id", g["id"]) for g in games] + [("first", "100"), ("type", "live")]
-    if auto.get("language"):
-        params.append(("language", auto["language"]))
+    langs = auto.get("languages") or auto.get("language") or []
+    params += [("language", l) for l in ([langs] if isinstance(langs, str) else langs)]
     streams = _get("https://api.twitch.tv/helix/streams?" + urllib.parse.urlencode(params), h)["data"]
     streams.sort(key=lambda s: -s["viewer_count"])
     top = streams[:auto.get("top", 10)]

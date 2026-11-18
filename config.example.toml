@@ -4,11 +4,12 @@
 quality = "best"        # z.B. "720p60,720p,best" wenn Bandbreite/CPU knapp wird
 buffer_seconds = 300    # lokaler Cache: letzte 5 Minuten pro Stream
 segment_seconds = 10
-pre_seconds = 30        # Sekunden VOR dem Chat-Spike im Clip
-post_seconds = 15       # Sekunden NACH dem Chat-Spike im Clip
+pre_seconds = 55        # Material VOR dem Chat-Spike (Aufbau des Moments)
+post_seconds = 25       # Material NACH dem Chat-Spike (Reaktion)
+min_clip_seconds = 61   # Mindestlaenge; geschnitten wird auf Sprechpausen, nie kuerzer als das
 min_score = 6           # niedriger = mehr Clips (5 = fast alles, 7 = nur starke Momente)
 workers = 2             # parallele Clip-Renderer
-language = "de"         # Whisper-Sprache, "" = automatisch
+language = ""           # Whisper-Sprache; "" = automatisch (Deutsch/Englisch je Streamer)
 out_dir = "clips"
 keep_rejected = false   # aussortierte Clips (unter min_score) als Roh-MP4 behalten
 
@@ -34,13 +35,13 @@ chat_id = ""            # herausfinden mit: python -m clipper telegram
 enabled = false
 games = ["Grand Theft Auto V", "Grand Theft Auto VI"]
 top = 10
-language = ""           # "de" = nur deutsche Streams, "" = weltweit
+languages = ["de", "en"] # nur deutsch- und englischsprachige Streams
 refresh_minutes = 30    # neue Top-Streamer werden laufend dazugenommen
 client_id = ""          # oder Umgebungsvariable TWITCH_CLIENT_ID
 client_secret = ""      # oder TWITCH_CLIENT_SECRET
 
 # Zusaetzlich oder stattdessen feste Kanaele: ein Block pro Streamer. cam = Facecam-Ausschnitt [x, y, breite, hoehe] als Anteil
-# des Bildes (0-1). Ohne cam wird das Gameplay mittig auf unscharfem Hintergrund gezeigt.
+# des Bildes (0-1). Ohne Angabe wird die Facecam automatisch per Gesichtserkennung gesucht.
 # [[channel]]
 # name = "streamer1"
 # cam = [0.75, 0.0, 0.25, 0.25]

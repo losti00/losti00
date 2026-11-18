@@ -40,8 +40,35 @@ def write_ass(words, path, has_cam):
     Path(path).write_text(head + "\n".join(lines) + "\n", encoding="utf-8")
 
 
-def render_vertical(src, dst, cam=None, words=None):
+def fit_window(words, duration, min_len):
+    """Schnittpunkte auf Sprechpausen legen, damit der Clip nicht mitten im Satz beginnt/endet.
+
+    Liefert (start, ende) in Sekunden; ende - start ist immer >= min_len (sofern genug Material da ist).
+    """
+    slack = duration - min_len
+    if slack <= 1 or not words:
+        return 0.0, duration
+    gaps = [(0.0, words[0][0], False)]
+    gaps += [(a[1], b[0], a[2][-1:] in ".!?") for a, b in zip(words, words[1:])]
+    gaps.append((words[-1][1], duration, True))
+
+    def best(lo, hi, default):
+        cand = [((g1 - g0) + (0.6 if punct else 0), (g0 + g1) / 2, g0, g1) for g0, g1, punct in gaps
+                if g1 - g0 >= 0.25 and lo <= (g0 + g1) / 2 <= hi]
+        return max(cand)[1:] if cand else (default, default, default)
+
+    _, _, start_gap_end = best(0.0, slack * 0.6, 0.0)
+    start = max(0.0, start_gap_end - 0.15)          # kurz vor dem ersten Wort einsteigen
+    _, end_gap_start, _ = best(duration - slack * 0.4, duration, duration)
+    end = min(duration, end_gap_start + 0.35)       # letztes Wort ausklingen lassen
+    return start, end
+
+
+def render_vertical(src, dst, cam=None, words=None, start=0.0, end=None):
     """cam = [x, y, w, h] als Bildanteile (0-1) oder None. Gibt True bei Erfolg."""
+    if words:
+        words = [(s - start, e - start, w) for s, e, w in words if s >= start and (end is None or e <= end)]
+    cut = ["-ss", f"{start:.2f}"] + (["-t", f"{end - start:.2f}"] if end else [])
     src, dst = Path(src).resolve(), Path(dst).resolve()
     if cam:
         x, y, w, h = cam
@@ -62,7 +89,7 @@ def render_vertical(src, dst, cam=None, words=None):
     else:
         fc += ";[v0]null[v]"
     r = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src), "-filter_complex", fc,
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *cut, "-i", str(src), "-filter_complex", fc,
          "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
          "-maxrate", "6M", "-bufsize", "12M", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
          "-movflags", "+faststart", dst.name],

@@ -42,5 +42,15 @@ und alle 30 Minuten die zehn groessten Live-Streams der eingetragenen Spiele und
 
 ## Facecam
 
-`cam = [x, y, breite, hoehe]` als Anteil des Bildes. Beispiel Cam oben rechts, ein Viertel breit:
-`[0.75, 0.0, 0.25, 0.25]`. Ohne `cam` wird das ganze Bild mittig auf unscharfem Hintergrund gezeigt.
+Die Facecam wird pro Clip automatisch per Gesichtserkennung gefunden (ein Gesicht, das ueber den ganzen
+Clip an derselben Stelle bleibt) und nach oben gesetzt, das Gameplay kommt darunter. Wird keine gefunden,
+erscheint das ganze Bild mittig auf unscharfem Hintergrund. Manuell ueberschreiben:
+`cam = [x, y, breite, hoehe]` als Anteil des Bildes im jeweiligen `[[channel]]`-Block.
+
+## Clip-Laenge, Titel, Untertitel
+
+- Jeder Clip ist mindestens `min_clip_seconds` (61) lang. Anfang und Ende werden auf Sprechpausen gelegt,
+  damit kein Satz abgeschnitten wird.
+- Neben jedem Clip liegt eine `.txt` mit dem Titel. Mit Ollama schreibt die KI einen Titel in der Sprache
+  des Streamers; ohne Ollama wird der Satz vor dem Chat-Spike genommen.
+- Untertitel werden Wort fuer Wort eingebrannt (Whisper erkennt Deutsch/Englisch automatisch).
