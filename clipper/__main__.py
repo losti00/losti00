@@ -114,6 +114,7 @@ def run(cfg):
     buf_dir = Path("buffer")
     names = [c["name"].lower() for c in cfg["channel"]]
     detector = Detector(**cfg["detect"])
+    score.preload(cfg["ai"]["whisper_model"])
     recs = recorder.start_recorders(cfg, buf_dir)
     chat = TwitchChat(names, detector)
     chat.start()
@@ -140,15 +141,15 @@ def run(cfg):
                             chat.add(n)
                 except Exception as e:
                     log.warning("Top-Streams konnten nicht aktualisiert werden: %s", e)
-            if time.time() - last_status > 300:
+            if time.time() - last_status > 180:
                 last_status = time.time()
                 log.info("Status: live=%s | Chat %s | Warteschlange %d",
                          ",".join(r.channel for r in recs if r.live) or "-",
                          "ok" if chat.connected else "GETRENNT", pool._work_queue.qsize())
-                dead = [r.channel for r in recs if not r.live]
-                if dead:
-                    log.warning("Kein Video von: %s  (offline - oder Leitung zu langsam: dann [auto] top "
-                                "senken bzw. quality reduzieren)", ", ".join(dead))
+                slow = [f"{r.channel} {r.speed() * 100:.0f}%" for r in recs if r.speed() < 0.85]
+                if slow:
+                    log.warning("Video kommt zu langsam oder gar nicht an: %s  -> Stream offline ODER Leitung "
+                                "ueberlastet. Dann in config.toml [auto] top senken.", ", ".join(slow))
     except KeyboardInterrupt:
         log.info("Beende ...")
         os._exit(0)
@@ -196,6 +197,8 @@ def selftest(cfg):
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    for noisy in ("httpx", "httpx2", "huggingface_hub", "faster_whisper"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     cfg = load_config()
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
     if cmd == "telegram":

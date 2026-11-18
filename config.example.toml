@@ -34,7 +34,7 @@ chat_id = ""            # herausfinden mit: python -m clipper telegram
 [auto]
 enabled = false
 games = ["Grand Theft Auto V", "Grand Theft Auto VI"]
-top = 5                 # Anzahl Streams. Faustregel: Download-Mbit/s geteilt durch 5
+top = 3                 # Anzahl Streams. Faustregel: Download-Mbit/s geteilt durch 6
 languages = ["de", "en"] # nur deutsch- und englischsprachige Streams
 refresh_minutes = 30    # neue Top-Streamer werden laufend dazugenommen
 client_id = ""          # oder Umgebungsvariable TWITCH_CLIENT_ID

@@ -64,6 +64,12 @@ class Recorder(threading.Thread):
                     p.kill()
         log.info("[%s] Stream beendet/unterbrochen, neuer Versuch", self.channel)
 
+    def speed(self, span=120):
+        """Wie viel Videozeit pro Echtzeit-Sekunde ankommt (1.0 = Leitung haelt mit)."""
+        now = time.time()
+        segs = [x for x in list_segments(self.dir, self.seg) if now - x[1] <= span]
+        return sum(e - a for a, e, _ in segs) / span
+
     def _cleanup(self):
         while True:
             cutoff = time.time() - self.keep

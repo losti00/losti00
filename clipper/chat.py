@@ -31,6 +31,7 @@ class Detector:
         self.lock = threading.Lock()
         self.msgs = {}          # channel -> deque[(ts, text)]
         self.first = {}         # channel -> erster Zeitstempel
+        self.total = {}         # channel -> Nachrichten insgesamt
         self.last_trigger = {}
 
     def feed(self, channel, text, ts=None):
@@ -39,6 +40,7 @@ class Detector:
             q = self.msgs.setdefault(channel, deque())
             q.append((max(ts, q[-1][0]) if q else ts, text))  # Reihenfolge monoton halten
             self.first.setdefault(channel, ts)
+            self.total[channel] = self.total.get(channel, 0) + 1
 
     def between(self, channel, a, b):
         with self.lock:
@@ -67,7 +69,10 @@ class Detector:
                     continue
                 span = min(self.baseline, w0 - self.first[ch])
                 base = sum(1 for t, _ in q if w0 - span < t <= w0) / span * self.window
-                ratio = len(recent) / max(base, 1.0)
+                # Luecken im Chat (lahme Leitung, Twitch verwirft Nachrichten) duerfen den Normalwert
+                # nicht auf fast null druecken - sonst sieht jedes Troepfeln wie ein Spike aus.
+                usual = self.total[ch] / max(ref - self.first[ch], 1) * self.window
+                ratio = len(recent) / max(base, 0.5 * usual, 1.0)
                 if ratio >= self.factor:
                     self.last_trigger[ch] = ref
                     spikes.append(Spike(ch, ref, ratio, len(recent), recent[-40:]))

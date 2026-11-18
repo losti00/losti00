@@ -12,6 +12,26 @@ _model, _model_lock = None, threading.Lock()
 _whisper_failed = False
 
 
+def preload(model_name):
+    """Modell VOR dem Start der Aufnahmen laden (einmaliger Download ca. 480 MB bei "small"),
+    damit der Download nicht mit den Streams um die Leitung konkurriert."""
+    global _model, _whisper_failed
+    if not model_name:
+        return
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        log.warning("faster-whisper nicht installiert -> kein Transkript, keine Untertitel")
+        _whisper_failed = True
+        return
+    log.info("Lade Whisper-Modell '%s' (beim ersten Mal Download, bitte warten) ...", model_name)
+    try:
+        _model = WhisperModel(model_name, device="auto", compute_type="auto")
+    except Exception:
+        _model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    log.info("Whisper-Modell bereit.")
+
+
 def transcribe(path, model_name, language):
     """Liefert [(start, ende, wort), ...] oder [] wenn Whisper nicht verfuegbar ist."""
     global _model, _whisper_failed
