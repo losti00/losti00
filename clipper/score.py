@@ -2,7 +2,9 @@
 import json
 import logging
 import math
+import subprocess
 import threading
+import urllib.error
 import urllib.request
 
 from .chat import hype_fraction
@@ -32,6 +34,26 @@ def preload(model_name):
     log.info("Whisper-Modell bereit.")
 
 
+def _audio(path):
+    """Ton per ffmpeg als 16-kHz-Mono dekodieren (unabhaengig von der PyAV-Version)."""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-vn", "-ac", "1",
+                          "-ar", "16000", "-f", "f32le", "-"], capture_output=True).stdout
+    return np.frombuffer(raw, dtype=np.float32)
+
+
+def _ollama_model(ai):
+    """Konfiguriertes Modell, sonst das erste installierte. None, wenn Ollama keins hat."""
+    base = ai["ollama_url"].rstrip("/")
+    with urllib.request.urlopen(base + "/api/tags", timeout=10) as r:
+        names = [m["name"] for m in json.loads(r.read()).get("models", [])]
+    want = ai["ollama_model"]
+    for n in names:
+        if n == want or n.split(":")[0] == want.split(":")[0]:
+            return n
+    return names[0] if names else None
+
+
 def transcribe(path, model_name, language):
     """Liefert [(start, ende, wort), ...] oder [] wenn Whisper nicht verfuegbar ist."""
     global _model, _whisper_failed
@@ -45,7 +67,10 @@ def transcribe(path, model_name, language):
                     _model = WhisperModel(model_name, device="auto", compute_type="auto")
                 except Exception:
                     _model = WhisperModel(model_name, device="cpu", compute_type="int8")
-            segs, _ = _model.transcribe(str(path), language=language or None, word_timestamps=True,
+            audio = _audio(path)
+            if audio.size < 16000:
+                return []
+            segs, _ = _model.transcribe(audio, language=language or None, word_timestamps=True,
                                         vad_filter=True)
             return [(w.start, w.end, w.word.strip()) for s in segs for w in (s.words or []) if w.word.strip()]
         except ImportError:
@@ -91,9 +116,13 @@ def score_clip(spike, messages, words, ai, spike_at=0.0):
         f"Chat-Nachrichten:\n" + "\n".join(m[:80] for m in messages[-40:]) +
         f"\n\nWas der Streamer sagt:\n{transcript}\n")
     try:
+        model = _ollama_model(ai)
+        if not model:
+            log.warning("Ollama laeuft, hat aber kein Modell. Einmalig ausfuehren: ollama pull %s", ai["ollama_model"])
+            return h, fb, "chat"
         req = urllib.request.Request(
             ai["ollama_url"].rstrip("/") + "/api/generate",
-            data=json.dumps({"model": ai["ollama_model"], "prompt": prompt, "stream": False,
+            data=json.dumps({"model": model, "prompt": prompt, "stream": False,
                              "format": "json", "options": {"temperature": 0.2}}).encode(),
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=90) as r:
