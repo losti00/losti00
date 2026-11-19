@@ -20,8 +20,9 @@ def subtitles_supported():
                         "&& brew unlink ffmpeg && brew link --force ffmpeg-full")
     return _subs_ok
 W, H = 1080, 1920
-HEAD_H, CAM_H = 220, 640          # oben: Headline-Balken, darunter Facecam, Rest Gameplay
-GAME_H = H - HEAD_H - CAM_H
+HEAD_H = 220                      # Headline-Balken, liegt genau in der Bildmitte
+CAM_H = (H - HEAD_H) // 2         # oben Facecam ...
+GAME_H = H - HEAD_H - CAM_H       # ... unten Gameplay
 FONTS = [
     "/System/Library/Fonts/Supplemental/Impact.ttf", "/System/Library/Fonts/Supplemental/Arial Black.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/Library/Fonts/Arial Bold.ttf",
@@ -79,7 +80,7 @@ def _ts(t):
 
 def write_ass(words, path, has_cam):
     """Zeigt je 3 Woerter, das gerade gesprochene farbig hervorgehoben."""
-    margin_v = H - HEAD_H - CAM_H - 70 if has_cam else 380
+    margin_v = 340 if has_cam else 560   # unterhalb der Headline, ueber der TikTok-Bedienleiste
     head = (
         "[Script Info]\nScriptType: v4.00+\n"
         f"PlayResX: {W}\nPlayResY: {H}\nWrapStyle: 2\n\n"
@@ -140,18 +141,16 @@ def render_vertical(src, dst, cam=None, words=None, start=0.0, end=None, headlin
               f"[a]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale={W}:{CAM_H}:force_original_aspect_ratio=increase,"
               f"crop={W}:{CAM_H}[cam];"
               f"[b]scale=-2:{GAME_H},crop={W}:{GAME_H}[game];"
-              f"[cam][game]vstack,pad={W}:{H}:0:{HEAD_H}:black[v0]")
-        head_y = 0
+              f"[cam]pad={W}:{H}:0:0:black[p];[p][game]overlay=0:{CAM_H + HEAD_H}[v0]")
     else:
         fc = (f"[0:v]split[a][b];"
               f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=24:4[bg];"
-              f"[b]scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
-        head_y = 390                                   # im unscharfen Bereich ueber dem Bild
+              f"[b]scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:{CAM_H}-h[v0]")   # Bild direkt ueber der Headline
     inputs = [*cut, "-i", str(src)]
     png = dst.with_suffix(".png")
-    if headline and make_headline(headline, png, opaque=bool(cam)):
+    if headline and make_headline(headline, png, opaque=True):
         inputs += ["-i", png.name]
-        fc += f";[v0][1:v]overlay=0:{head_y}[v1]"
+        fc += f";[v0][1:v]overlay=0:{CAM_H}[v1]"         # Headline zentral in der Bildmitte
     else:
         fc += ";[v0]null[v1]"
     ass = None
