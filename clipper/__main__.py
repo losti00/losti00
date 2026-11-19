@@ -53,8 +53,8 @@ def process(cfg, spike, detector, buf_dir, wait=True):
     ch = spike.channel
     chan_cfg = next((c for c in cfg["channel"] if c["name"].lower() == ch), {})
     t0, t1 = spike.t - g["pre_seconds"], spike.t + g["post_seconds"]
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(spike.t))
-    out_dir = Path(g["out_dir"]) / ch
+    stamp = ch + "_" + time.strftime("%Y%m%d-%H%M%S", time.localtime(spike.t))
+    out_dir = Path(g["out_dir"])                       # alle Clips in EINEM Ordner, Streamer steht im Namen
     out_dir.mkdir(parents=True, exist_ok=True)
     raw = out_dir / f"{stamp}_raw.mp4"
     try:
@@ -115,9 +115,9 @@ def vod_one(cfg, clip):
     """Ein Zuschauer-Clip -> die Stelle grosszuegig aus der Aufzeichnung laden und fertig verarbeiten."""
     g = cfg["general"]
     ch = (clip.get("broadcaster_name") or "unbekannt").lower().replace(" ", "")
-    out_dir = Path(g["out_dir"]) / ch
+    out_dir = Path(g["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = f"{clip.get('created_at', '')[:10]}_{clip['id'][:14]}"
+    stamp = f"{ch}_{clip.get('created_at', '')[:10]}_{clip['id'][:14]}"
     raw = out_dir / f"{stamp}_raw.mp4"
     lead, tail = 30, 25                                # Aufbau davor, Reaktion danach
     start = max(0, int(clip["vod_offset"]) - lead)
@@ -180,7 +180,7 @@ def vod(cfg):
 def run(cfg):
     recorder.check_tools()
     render.subtitles_supported()
-    for old in Path(cfg["general"]["out_dir"]).glob("*/*_raw.*"):  # Reste abgebrochener Laeufe
+    for old in Path(cfg["general"]["out_dir"]).glob("*_raw.*"):  # Reste abgebrochener Laeufe
         old.unlink(missing_ok=True)
     auto = cfg["auto"]
     if auto["enabled"]:

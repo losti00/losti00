@@ -64,4 +64,5 @@ erscheint das ganze Bild mittig auf unscharfem Hintergrund. Manuell ueberschreib
   damit kein Satz abgeschnitten wird.
 - Neben jedem Clip liegt eine `.txt` mit dem Titel. Mit Ollama schreibt die KI einen Titel in der Sprache
   des Streamers; ohne Ollama wird der Satz vor dem Chat-Spike genommen.
+- Alle fertigen Clips liegen zusammen in `clips/`, der Streamer steht vorne im Dateinamen.
 - Untertitel werden Wort fuer Wort eingebrannt (Whisper erkennt Deutsch/Englisch automatisch).
